@@ -11,3 +11,6 @@ In 5-card mode you apply same rules to each card, and the final answer will be t
 ## Interface:
 On the right side you will see a shuffle button, 5 token buttons, and a change of game mode button.
 On the bottom you can see a score count and timer.
+
+## Adding more game cards:
+You can simply add more images to the folder images/front. File should be .png, and a file name can be anything ending with \_{answer} like (image1_cat, image2_cat, image3_mouse etc). Answer should be the correct answer for the game card in order to populate it properly.  
