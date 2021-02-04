@@ -1,0 +1,469 @@
+#!/usr/bin/env python3
+import pygame
+import sys
+import random
+import cv2
+import os
+import copy
+import enum
+
+# for test mode
+TEST_MODE = False
+
+# Define colors
+WHITE = (255, 255, 255)
+DARK_TEAL = (0, 81, 87)
+LIGHT_TEAL = (0, 142, 151)
+BLACK = (0, 0, 0)
+
+# Init font
+pygame.font.init() 
+score_font = pygame.font.SysFont('Hobo Std Medium', 50)
+small_font = pygame.font.SysFont('Hobo Std Medium', 35)
+# Define folder paths
+FOLDER_FRONT = "images/front"
+FOLDER_BACK = "images/back"
+IMAGE_FOLDER = "images/"
+FRAME = "images/frame.png"
+REVERSE = "images/reverse.png"
+BIG_FRAME = "images/big_frame.png"
+ANSWERS = ["mouse", "cat", "cheese", "ball", "pillow"]
+GAME_OVER = score_font.render('Game Over', False, DARK_TEAL)
+
+# Set screen info
+WIDTH = 545
+HEIGHT = 750
+W_BIG = 1000
+BUTTON_SIZE = 90
+ANSWER_BTN_SIZE = 65
+BTN_Y_START = 135 # topmost answer buttons active area
+BETWEEN_BTN = 42 # distance between buttons
+
+# Set image size
+resizeX = 500
+resizeY = 750
+
+# i - index in a deck of Cards
+i = 0
+
+# create a deck
+deck = []
+
+# map of decks
+piles = {}
+
+class Result:
+   Bad = 0
+   Good = 1
+
+class Position:
+	Previous = -1
+	Current = 0
+	Next = 1
+
+# coordinates of answer buttons
+coord_Y = {"mouse": BTN_Y_START, "cat": (BTN_Y_START + ANSWER_BTN_SIZE + BETWEEN_BTN), "cheese": (BTN_Y_START + 2 * ANSWER_BTN_SIZE + 2 * BETWEEN_BTN), "ball": (BTN_Y_START + 3 * ANSWER_BTN_SIZE + 3 * BETWEEN_BTN), "pillow": (BTN_Y_START + 4 * ANSWER_BTN_SIZE + 4 * BETWEEN_BTN)}
+
+# current five card deck and previous
+current_five_card_deck = []
+prev_five_card_deck = []
+next_five_card_deck = []
+current_position = Position.Next
+prev_answer_index = -1
+answ_index = -1
+
+# indicate current game mode
+in_big_mode = False
+CARDS = 5
+lives = 3
+score = 0
+current_index = 0
+
+game_over = False
+
+class Card:  
+	def __init__(self, front, back):  
+		self.front = front  
+		self.back = back
+
+def init_piles():
+	for answer in ANSWERS:
+		piles[answer] = []
+
+def get_image_names(folder):
+	for filename in os.listdir(folder):
+		img = cv2.imread(os.path.join(folder,filename))
+		if img is not None:
+			back_name = filename.split("_")[1]
+			current_card = Card(os.path.join(folder,filename), os.path.join(FOLDER_BACK, back_name))
+			deck.append(current_card)
+			piles[back_name[:-4]].append(current_card)
+	return
+
+def show_card(index, is_question_card):
+	if is_question_card:
+		img = pygame.image.load(deck[index].front)
+	else:
+		img = pygame.image.load(deck[index].back)
+	scaled_img = scale_img(img, resizeX)
+	screen.blit(scaled_img, (0, 0))
+
+def clear_screen():
+	screen.fill(WHITE)
+
+# shows img, waits, clears the screen
+def flip_card(img, x, y):
+	screen.blit(img, (x, y))
+	pygame.display.update()
+	pygame.time.delay(400)
+	clear_screen()
+
+def update_frame(frame, x, y):
+	screen.blit(frame, (0, 0))
+	screen.blit(update_lives(), (x, y))
+	screen.blit(update_score(), (50, HEIGHT - 52))
+	if current_position != Position.Next and in_big_mode:
+		my_position = "two cards before" if current_position == Position.Previous else "previous card"
+		screen.blit(small_font.render('Looking at ' + my_position, False, BLACK), (70, 650))
+	elif i < current_index and not in_big_mode:
+		print('Looking ' + str(current_index - i))
+		card = " card " if (current_index - i) == 1 else " cards "
+		screen.blit(small_font.render('Looking ' + str(current_index - i) + card + "before", False, BLACK), (100, 70))
+				
+def scale_img(img_to_scale, size_x):
+	size = img_to_scale.get_rect().size
+	resizeY = int(size_x * size[1]/size[0])
+	small_img = pygame.transform.scale(img_to_scale, (size_x, resizeY))
+	return small_img
+
+# display cards in 5 cards mode
+def show_cards(cards_to_show, is_question_card):
+	pos_x = 70
+	pos_y = 32
+	cards_backs = []
+	screen.fill(WHITE)
+	for i in range(CARDS):
+		img = pygame.image.load(cards_to_show[i].front)
+		
+		size = img.get_rect().size
+		X = int(resizeX / 2.3)
+		Y = int(X * size[1]/size[0])
+		if i == (int(CARDS/2) + 1):
+			pos_x = 200
+			pos_y = 357
+		small_img = pygame.transform.scale(img, (X, Y))
+		screen.blit(small_img, (pos_x, pos_y))
+		pos_x += 280
+
+	if not is_question_card:
+		img = pygame.transform.scale(pygame.image.load(find_answer(cards_to_show)), (X, Y))
+		screen.blit(img, (330,200))
+	update_frame(big_frame, 500, HEIGHT - 62)
+
+# find answer for 5 cards mode
+def find_answer(cards):
+	cards_backs = []
+	for card in cards:
+		cards_backs.append(card.back)
+	for a in ANSWERS:
+		count = 0
+		for card in cards_backs:
+			if a in card:
+				count += 1
+			if count == 2:
+				return card
+
+# get 5 cards, shuffle
+def get_five(answer_to_dup):
+	prev_five_card_deck = current_five_card_deck
+	five_card_deck = []
+	random.shuffle(piles[answer_to_dup])
+	five_card_deck.append(piles[answer_to_dup][0])
+	five_card_deck.append(piles[answer_to_dup][1])
+	picked_answers = []
+	for answer in ANSWERS:
+		if answer != answer_to_dup:
+			picked_answers.append(answer)
+	random.shuffle(picked_answers)
+	for i in range(0, 3):
+		card_index = random.randrange(len(piles[picked_answers[i]]))
+		five_card_deck.append(piles[picked_answers[i]][card_index])
+	random.shuffle(five_card_deck)
+	return five_card_deck
+
+def shuffle_deck():
+	prev_answer = ""
+	j = 0
+	curr_inds = [0,0,0,0,0]
+	for answer in ANSWERS:
+		random.shuffle(piles[answer])
+	for i in range(len(deck)):
+		while ANSWERS[j] == prev_answer:
+			j = random.randrange(len(ANSWERS))
+		deck[i] = piles[ANSWERS[j]][curr_inds[j]]
+		
+		if curr_inds[j] == len(piles[ANSWERS[j]]) - 1:
+			random.shuffle(piles[ANSWERS[j]])
+			
+		curr_inds[j] = (curr_inds[j] + 1) % len(piles[ANSWERS[j]])
+		prev_answer = ANSWERS[j]
+
+def resize_screen():
+	clear_screen()
+	pygame.display.update()
+	if in_big_mode:
+		size = (W_BIG, HEIGHT)
+		img = big_frame
+		livesXY = [500, HEIGHT - 65]
+	else:
+		size = (WIDTH, HEIGHT)
+		img = frame
+		livesXY = [0, 0]
+	# updates size and loads corresponding frame
+	screen = pygame.display.set_mode(size)
+	if in_big_mode:
+		show_cards(next_five_card_deck, True)
+	else: 
+		show_card(i, True)
+
+	update_frame(img, livesXY[0], livesXY[1])
+	pygame.display.update()
+
+# loads appropriate lives image
+def update_lives():
+	return pygame.image.load(IMAGE_FOLDER + str(lives) + ".png")
+
+# updates text board for scores
+def update_score():
+	return score_font.render('Score: ' + str(score), False, DARK_TEAL)
+
+# updates timer
+def update_timer(time):
+	return score_font.render('Time: ' + str(time), False, DARK_TEAL)
+
+# iterates over indexes
+def next_i():
+	print(i)
+	if i == len(deck) - 1:
+		shuffle_deck()
+	return (i + 1) % max_size
+
+def five_answer_index():
+	global answ_index
+	global prev_answer_index
+	while answ_index == prev_answer_index:
+		answ_index = random.randrange(5)
+	prev_answer_index = answ_index
+	return answ_index
+
+# game initialization
+screen = pygame.display.set_mode((800,800))
+pygame.init()
+init_piles()
+
+# uploading images
+get_image_names(FOLDER_FRONT)
+frame = scale_img(pygame.image.load(FRAME), WIDTH)
+reverse = scale_img(pygame.image.load(REVERSE), WIDTH)
+big_frame = pygame.image.load(BIG_FRAME)
+paws = [pygame.image.load(IMAGE_FOLDER + "bad" + ".png"), pygame.image.load(IMAGE_FOLDER + "good" + ".png")]
+
+max_size = len(deck)
+shuffle_deck()
+
+# initial 5-card deck for 5-card mode
+next_five_card_deck = get_five(ANSWERS[five_answer_index()])
+
+pygame.display.update()
+
+is_Q = True
+
+# initial screen
+resize_screen()
+
+update_frame(frame, 0, 0)
+pygame.display.update()
+
+# Timer
+clock = pygame.time.Clock()
+start_time = pygame.time.get_ticks() 
+timer_bg = pygame.draw.rect(screen, LIGHT_TEAL, (340, HEIGHT - 61, 100, 61))
+
+game_time = 0
+
+while True:
+	for event in pygame.event.get():
+		pygame.display.update(timer_bg)
+		if in_big_mode:
+			curr_frame = big_frame
+			curr_width = W_BIG
+			livesXY = [500, HEIGHT - 65]
+		else:
+			curr_frame = frame
+			curr_width = WIDTH
+			livesXY = [0, 0]
+		if event.type == pygame.KEYDOWN and not in_big_mode:
+			clear_screen()
+			if event.key == pygame.K_LEFT:
+				# show question card
+				is_Q = True
+
+			if event.key == pygame.K_RIGHT and (TEST_MODE or current_index > i):
+				# show answer card
+				is_Q = False
+
+			if event.key == pygame.K_DOWN and (TEST_MODE or current_index > i):
+				print("here "+ str(i))
+				i = next_i()
+				if i > current_index:
+					current_index = i
+				flip_card(reverse, 0, 0)
+				is_Q = True
+
+			if event.key == pygame.K_UP:
+				if i > 0:
+					flip_card(reverse, 0, 0)
+					i = (i - 1) % max_size
+					is_Q = True
+				
+			show_card(i, is_Q)
+				
+			update_frame(frame, 0, 0)
+			pygame.display.update()
+
+		if event.type == pygame.KEYDOWN and in_big_mode:
+			if current_position == Position.Previous:
+				print("Before we are")
+				five_cards_to_show = prev_five_card_deck
+			elif current_position == Position.Current:
+				print("Current we are")
+				five_cards_to_show = current_five_card_deck
+			else:
+				print("Next we are")
+				five_cards_to_show = next_five_card_deck
+				
+			if event.key == pygame.K_LEFT:
+				# show question card
+				show_cards(five_cards_to_show, True)
+
+			if event.key == pygame.K_RIGHT and (TEST_MODE or current_position == Position.Previous or current_position == Position.Current):
+				# show answer card
+				show_cards(five_cards_to_show, False)
+			if event.key == pygame.K_UP:
+				if current_position == Position.Current:
+					if len(prev_five_card_deck) > 0:
+						current_position = Position.Previous
+						five_cards_to_show = prev_five_card_deck
+				elif current_position == Position.Next:
+					if len(current_five_card_deck) > 0:
+						current_position = Position.Current
+						five_cards_to_show = current_five_card_deck
+				show_cards(five_cards_to_show, True)
+			if event.key == pygame.K_DOWN and (TEST_MODE or current_position == Position.Previous or current_position == Position.Current):
+				if current_position == Position.Previous:
+					current_position = Position.Current
+					five_cards_to_show = current_five_card_deck
+				elif current_position == Position.Current:
+					current_position = Position.Next
+					five_cards_to_show = next_five_card_deck
+				else:
+					prev_five_card_deck = current_five_card_deck
+					current_five_card_deck = next_five_card_deck
+					next_five_card_deck = get_five(ANSWERS[five_answer_index()])
+					five_cards_to_show = next_five_card_deck
+				show_cards(five_cards_to_show, True)
+			update_frame(big_frame, 500, HEIGHT - 62)
+			pygame.display.update()
+		if event.type == pygame.MOUSEBUTTONUP:
+			pos = pygame.mouse.get_pos()
+			if pos[0] > WIDTH - BUTTON_SIZE and pos[1] < BUTTON_SIZE:
+				if in_big_mode:
+					current_five_card_deck = get_five(ANSWERS[answ_index])
+					show_cards(current_five_card_deck, True)
+				else:
+					shuffle_deck()
+					show_card(0, True)
+				
+				i = 0
+				current_index = 0
+
+				if lives == 0:
+					lives = 3
+					score = 0
+					start_time = pygame.time.get_ticks() 
+					game_over = False
+				update_frame(curr_frame, livesXY[0], livesXY[1])
+				pygame.display.update()
+				
+			if pos[0] > curr_width - BUTTON_SIZE and pos[1] > HEIGHT - BUTTON_SIZE:
+				if ((i < current_index and not in_big_mode) or (current_position != Position.Next and in_big_mode)):
+					i = current_index
+					current_position = Position.Next
+				in_big_mode = not in_big_mode
+				resize_screen()
+				
+		if event.type == pygame.MOUSEBUTTONUP and ((current_index == i and not in_big_mode) or (current_position == Position.Next and in_big_mode)):
+			# answers buttons	
+			if pos[0] > WIDTH - BUTTON_SIZE: 
+				for answer in coord_Y:
+					if pos[1] > coord_Y[answer] and pos[1] < coord_Y[answer] + ANSWER_BTN_SIZE:
+						
+						# show the answer
+						curr_answer = find_answer(next_five_card_deck) if in_big_mode else deck[i].back
+						if answer in curr_answer:
+							score += 2 if in_big_mode else 1
+							good_or_bad = Result.Good
+						else:
+							lives -= 1
+							good_or_bad = Result.Bad
+						clear_screen()
+						if in_big_mode:
+							show_cards(next_five_card_deck, False)
+						else: 
+							show_card(i, False)
+						update_frame(curr_frame, livesXY[0], livesXY[1])
+
+						screen.blit(paws[good_or_bad], (curr_width - BUTTON_SIZE, coord_Y[answer]))		
+						
+						if not game_over:
+							screen.blit(update_timer(str(int(passed_time/60000)) + ":" + str('{:02d}'.format(int(passed_time/1000 % 60)))), (240, HEIGHT - 52))
+						pygame.display.update()
+
+						pygame.time.delay(1200)	
+						clear_screen()
+						i = next_i()
+						current_index = i
+						if in_big_mode:
+							prev_five_card_deck = current_five_card_deck
+							current_five_card_deck = next_five_card_deck
+							next_five_card_deck = get_five(ANSWERS[five_answer_index()])
+							five_cards_to_show = next_five_card_deck
+							show_cards(next_five_card_deck, True)
+						else: 
+							show_card(i, True)
+
+						update_frame(curr_frame, livesXY[0], livesXY[1])
+
+						if lives == 0:
+							clear_screen()
+							update_frame(curr_frame, livesXY[0], livesXY[1])
+							extra_x = 300 if in_big_mode else 0
+							screen.blit(GAME_OVER,(120 + extra_x,300))
+							game_over = True
+							game_time = passed_time
+							screen.blit(update_timer(str(int(game_time/60000)) + ":" + str('{:02d}'.format(int(game_time/1000 % 60)))), (240, HEIGHT - 52))
+						pygame.display.update()
+
+		if event.type == pygame.QUIT:
+			sys.exit()
+	
+	# Display timer while not game over
+	if not game_over:
+		passed_time = pygame.time.get_ticks() - start_time
+		# minutes and seconds
+		pygame.draw.rect(screen, LIGHT_TEAL, (340, HEIGHT - 61, 100, 61))
+		screen.blit(update_timer(str(int(passed_time/60000)) + ":" + str('{:02d}'.format(int(passed_time/1000 % 60)))), (240, HEIGHT - 52))
+		pygame.display.update()
+		clock.tick(60)
+
+
